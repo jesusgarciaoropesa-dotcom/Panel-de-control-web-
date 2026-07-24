@@ -1,0 +1,89 @@
+.nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-8);
+  background: var(--color-surface);
+  border-bottom: var(--rule-width) solid var(--color-text);
+}
+
+/* --- Brand -------------------------------------------------------------- */
+.nav__brand {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.nav__brand-mark {
+  font-size: 22px;
+  font-weight: var(--font-weight-bold);
+  color: var(--color-accent-500);
+  line-height: 1;
+}
+
+.nav__brand-name {
+  font-size: var(--font-size-card-title);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: -0.01em;
+  text-transform: uppercase;
+}
+
+/* --- Controls ----------------------------------------------------------- */
+.nav__controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+/* Segmented control */
+.segmented {
+  display: inline-flex;
+  border: var(--rule-width) solid var(--color-text);
+}
+
+.segmented__option {
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+
+.segmented__option + .segmented__option {
+  border-left: var(--rule-width) solid var(--color-text);
+}
+
+.segmented__option--active {
+  background: var(--color-text);
+  color: var(--color-surface);
+}
+
+/* Live indicator */
+.live {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-neutral-600);
+}
+
+.live__dot {
+  width: 8px;
+  height: 8px;
+  background: var(--color-accent-500);
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+
+.live--idle .live__dot {
+  animation-duration: 2.6s;
+}
+
+.live--on {
+  color: var(--color-accent-600);
+}

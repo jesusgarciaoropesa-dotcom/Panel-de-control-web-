@@ -1,0 +1,74 @@
+/**
+ * Modernist design system — design tokens.
+ *
+ * Anchors from the design handoff:
+ *   background #f3f2f2 · text #201e1d · accent #ec3013
+ *   Neutral / accent ramps 100–900 expressed in OKLCH.
+ *   Typography: Archivo. Radius: 0px everywhere. Rules: 2px.
+ *   Spacing scale: 4, 8, 12, 16, 24, 32 (no 5/7 steps).
+ */
+:root {
+  /* --- Base palette ------------------------------------------------------ */
+  --color-background: #f3f2f2;
+  --color-surface: #ffffff;
+  --color-text: #201e1d;
+
+  /* Neutral ramp (OKLCH) — light → dark */
+  --color-neutral-100: oklch(0.97 0.002 60);
+  --color-neutral-200: oklch(0.92 0.003 60);
+  --color-neutral-300: oklch(0.85 0.003 60);
+  --color-neutral-400: oklch(0.74 0.004 60);
+  --color-neutral-500: oklch(0.62 0.005 60);
+  --color-neutral-600: oklch(0.52 0.006 60);
+  --color-neutral-700: oklch(0.42 0.006 60);
+  --color-neutral-800: oklch(0.32 0.006 50);
+  --color-neutral-900: oklch(0.24 0.006 45);
+
+  /* Accent ramp (OKLCH) anchored on #ec3013 at 500 */
+  --color-accent-100: oklch(0.94 0.04 30);
+  --color-accent-200: oklch(0.88 0.08 30);
+  --color-accent-300: oklch(0.79 0.14 30);
+  --color-accent-400: oklch(0.70 0.19 30);
+  --color-accent-500: oklch(0.62 0.229 30); /* ≈ #ec3013 */
+  --color-accent-600: oklch(0.55 0.221 30);
+  --color-accent-700: oklch(0.47 0.19 30);
+  --color-accent-800: oklch(0.39 0.15 30);
+  --color-accent-900: oklch(0.31 0.11 30);
+
+  /* Semantic aliases */
+  --color-accent: var(--color-accent-500);
+  --color-positive: oklch(0.58 0.14 150);
+  --color-negative: var(--color-accent-500);
+
+  /* --- Typography -------------------------------------------------------- */
+  --font-family: 'Archivo', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  --font-size-kpi-label: 11px;
+  --font-size-caption: 12px;
+  --font-size-body: 14px;
+  --font-size-card-title: 16px;
+  --font-size-card-title-lg: 18px;
+  --font-size-kpi-value: 30px;
+  --font-size-channel-metric: 34px;
+
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* --- Spacing ----------------------------------------------------------- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* --- Radius & rules ---------------------------------------------------- */
+  --radius: 0px;
+  --rule-width: 2px;
+  --divider-width: 1px;
+
+  /* --- Layout ------------------------------------------------------------ */
+  --content-max-width: 1200px;
+}

@@ -1,0 +1,25 @@
+{
+  "name": "panel-de-control-multicanal",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Panel de control que centraliza métricas de Instagram, Facebook, Google Analytics, Google AdSense y Amazon Afiliados en una sola vista.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "lucide-react": "^0.454.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  }
+}

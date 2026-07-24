@@ -1,0 +1,26 @@
+.trend {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+  line-height: 1;
+}
+
+.trend--up {
+  color: var(--color-positive);
+}
+
+.trend--down {
+  color: var(--color-accent-500);
+}
+
+.trend--flat {
+  color: var(--color-neutral-500);
+}
+
+.trend__caption {
+  color: var(--color-neutral-500);
+  font-weight: var(--font-weight-regular);
+  margin-left: var(--space-1);
+}
