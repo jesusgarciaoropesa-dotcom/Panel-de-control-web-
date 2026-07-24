@@ -65,24 +65,38 @@ skeletons.
 > que guarda los tokens OAuth y aplica la caché recomendada (5–15 min) para no
 > exceder cuotas. Nunca envíes secretos de Meta / Google / Amazon al cliente.
 
-Para conectar datos reales:
+### Backend ya provisionado (Supabase)
 
-1. Implementa el endpoint `GET /api/dashboard?period=7d|30d` en tu backend, que
-   devuelva un `DashboardSnapshot` (ver `src/data/types.ts`).
-2. Crea `src/data/httpProvider.ts`:
+El backend vive en el proyecto Supabase **wtj-barbershop**, en un schema aislado
+`panel` (no toca el schema `public` de esa app):
 
-   ```ts
-   import type { DashboardProvider } from './api';
+- **`panel.connections`** — tokens OAuth por usuario+canal. Solo `service_role`.
+- **`panel.snapshots`** — caché de `DashboardSnapshot` por usuario+periodo (TTL 10 min).
+- **`panel.amazon_imports`** — datos manuales de Amazon Afiliados.
+- **Edge Function `dashboard`** — `GET /functions/v1/dashboard?period=7d|30d`;
+  aplica la caché y, autenticada, re-sincroniza. Código en
+  `supabase/functions/dashboard/index.ts`.
 
-   export const httpProvider: DashboardProvider = {
-     async fetchDashboard(period, signal) {
-       const res = await fetch(`/api/dashboard?period=${period}`, { signal });
-       if (!res.ok) throw new Error('Error al cargar el panel');
-       return res.json();
-     },
-   };
-   ```
-3. En `src/data/api.ts`, cambia `activeProvider` de `mockProvider` a `httpProvider`.
+Las tablas tienen RLS habilitada **sin políticas permisivas**: el navegador
+nunca las lee; solo la Edge Function (service_role) accede.
+
+**Para que el frontend consuma el backend real:**
+
+```bash
+cp .env.example .env   # ya trae la URL + clave anon públicas del proyecto
+npm run dev
+```
+
+`src/data/api.ts` elige automáticamente `httpProvider` (Supabase) cuando
+`VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY` están definidas, y `mockProvider`
+si no lo están. No hay que tocar código.
+
+> **Estado actual:** la Edge Function devuelve un snapshot de *demostración*
+> calculado server-side (mismo formato que el real). El paso que falta para datos
+> 100 % reales es rellenar `syncSnapshot()` con las llamadas OAuth a cada canal
+> (marcado con `TODO` en el código). La UI y el contrato de datos no cambian.
+
+### Integraciones pendientes por canal
 
 El backend es responsable de mapear cada respuesta cruda a los modelos
 normalizados. Resumen de integraciones:

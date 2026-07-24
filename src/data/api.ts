@@ -15,6 +15,7 @@
 
 import type { ChannelId, DashboardSnapshot, Period } from './types';
 import { mockProvider } from './mockProvider';
+import { httpProvider, isHttpProviderConfigured } from './httpProvider';
 
 export interface DashboardProvider {
   /** Returns a fully normalized snapshot for the given period. */
@@ -22,12 +23,20 @@ export interface DashboardProvider {
 }
 
 /**
- * The provider currently backing the app.
+ * Provider activo.
  *
- * Replace with `httpProvider` (a thin `fetch('/api/dashboard')` wrapper) once
- * the backend endpoints described in the README exist.
+ * Se usa el backend real (Edge Function de Supabase) en cuanto están definidas
+ * las variables VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY (ver `.env.example`).
+ * En caso contrario cae al `mockProvider` para desarrollo local sin backend.
  */
-const activeProvider: DashboardProvider = mockProvider;
+const activeProvider: DashboardProvider = isHttpProviderConfigured
+  ? httpProvider
+  : mockProvider;
+
+/** Nombre legible del origen de datos activo (para diagnósticos/UI). */
+export const activeProviderName = isHttpProviderConfigured
+  ? 'supabase'
+  : 'mock';
 
 export function fetchDashboard(
   period: Period,
