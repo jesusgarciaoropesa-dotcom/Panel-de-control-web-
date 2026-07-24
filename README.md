@@ -73,12 +73,44 @@ El backend vive en el proyecto Supabase **wtj-barbershop**, en un schema aislado
 - **`panel.connections`** — tokens OAuth por usuario+canal. Solo `service_role`.
 - **`panel.snapshots`** — caché de `DashboardSnapshot` por usuario+periodo (TTL 10 min).
 - **`panel.amazon_imports`** — datos manuales de Amazon Afiliados.
+- **`panel.integration_config`** — config global de integraciones (p. ej. el ID
+  de propiedad de GA4 y la clave de la cuenta de servicio). Solo `service_role`.
 - **Edge Function `dashboard`** — `GET /functions/v1/dashboard?period=7d|30d`;
   aplica la caché y, autenticada, re-sincroniza. Código en
   `supabase/functions/dashboard/index.ts`.
 
 Las tablas tienen RLS habilitada **sin políticas permisivas**: el navegador
 nunca las lee; solo la Edge Function (service_role) accede.
+
+### Conectar Google Analytics (GA4) — vía cuenta de servicio
+
+Es el primer canal con integración real implementada. Se usa una **cuenta de
+servicio** de Google (más simple que OAuth para un panel de un solo dueño): un
+"usuario robot" al que se le da acceso de *lector* en la propiedad de GA4.
+
+Pasos (los del panel de Google los hace el usuario; el resto, el desarrollador):
+
+1. **Google Cloud Console** → crear/elegir un proyecto → habilitar la
+   **Google Analytics Data API**.
+2. Crear una **cuenta de servicio** y generar una **clave JSON** (se descarga un
+   fichero `.json` con `client_email` y `private_key`).
+3. En **GA4 → Administrar → Gestión de accesos a la propiedad**, añadir el
+   `client_email` de la cuenta de servicio con rol **Lector**.
+4. Anotar el **ID de propiedad** de GA4 (solo cifras, p. ej. `123456789`).
+5. Aportar `property_id` + JSON de la cuenta de servicio al backend, de una de
+   estas dos formas:
+   - **Secretos de Supabase** (recomendado): variables `GA_PROPERTY_ID` y
+     `GA_SERVICE_ACCOUNT_JSON` en *Edge Functions → Secrets*.
+   - **Base de datos**: fila en `panel.integration_config` con
+     `channel = 'analytics'` y `config = { "property_id": "...",
+     "service_account": { ...json... } }`.
+
+La Edge Function (`fetchAnalyticsChannel`) firma un JWT RS256 con la clave de la
+cuenta de servicio, obtiene un token de Google y llama a `runReport` de la GA4
+Data API (`sessions`, `screenPageViews`, `averageSessionDuration`, `bounceRate`
++ serie diaria y variación vs. periodo anterior). Si no hay config, ese canal
+cae a demo; si hay config pero falla, se muestra en estado de error sin tumbar
+el resto del panel.
 
 **Para que el frontend consuma el backend real:**
 
@@ -91,10 +123,10 @@ npm run dev
 `VITE_SUPABASE_URL` y `VITE_SUPABASE_ANON_KEY` están definidas, y `mockProvider`
 si no lo están. No hay que tocar código.
 
-> **Estado actual:** la Edge Function devuelve un snapshot de *demostración*
-> calculado server-side (mismo formato que el real). El paso que falta para datos
-> 100 % reales es rellenar `syncSnapshot()` con las llamadas OAuth a cada canal
-> (marcado con `TODO` en el código). La UI y el contrato de datos no cambian.
+> **Estado actual:** **Google Analytics** tiene integración real (se activa al
+> configurar las credenciales, ver abajo). Instagram, Facebook, AdSense y Amazon
+> siguen en *demostración* hasta implementar su OAuth. La UI y el contrato de
+> datos no cambian entre demo y real.
 
 ### Integraciones pendientes por canal
 

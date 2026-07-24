@@ -5,15 +5,14 @@
  * Devuelve un DashboardSnapshot ya normalizado, aplicando la capa de caché
  * (panel.snapshots, TTL 10 min) para no exceder cuotas de las APIs de canal.
  *
- * Flujo:
- *   1. Si la petición está autenticada (JWT de Supabase) → usa ese user_id,
- *      sirve de caché si está fresca y, si no, re-sincroniza y cachea.
- *   2. Si no está autenticada → modo demo: calcula un snapshot al vuelo y NO
- *      persiste (útil mientras el frontend aún no tiene login).
+ * Estado de las integraciones:
+ *   - Google Analytics (GA4): REAL cuando están definidas las variables de
+ *     entorno GA_PROPERTY_ID y GA_SERVICE_ACCOUNT_JSON (ver README →
+ *     "Conectar Google Analytics"). Si no, cae a datos de demostración.
+ *   - Instagram / Facebook / AdSense / Amazon: demo por ahora (pendiente OAuth).
  *
- * La sincronización real con Meta Graph / GA4 / AdSense va en `syncSnapshot()`,
- * donde hoy hay un cálculo de demostración marcado con TODO. Los tokens OAuth
- * viven en panel.connections y solo los lee esta función (service_role).
+ * Los secretos (clave de la cuenta de servicio) viven solo en el entorno de la
+ * función, nunca en el navegador ni en git.
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -60,6 +59,271 @@ const metric = (label: string, value: string, changePct?: number) => ({
   changePct,
 });
 
+// ===========================================================================
+// Google Analytics (GA4 Data API) vía cuenta de servicio
+// ===========================================================================
+
+/** base64url de una cadena. */
+function b64url(input: string): string {
+  return btoa(input).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/** base64url de bytes. */
+function b64urlBytes(bytes: Uint8Array): string {
+  let s = '';
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/** Importa la clave privada PEM (PKCS#8) de la cuenta de servicio. */
+async function importPrivateKey(pem: string): Promise<CryptoKey> {
+  // `private_key` viene de JSON.parse, así que los saltos de línea ya son
+  // reales; `\s+` los elimina junto al resto de espacios.
+  const body = pem
+    .replace(/-----BEGIN PRIVATE KEY-----/, '')
+    .replace(/-----END PRIVATE KEY-----/, '')
+    .replace(/\s+/g, '');
+  const der = Uint8Array.from(atob(body), (c) => c.charCodeAt(0));
+  return await crypto.subtle.importKey(
+    'pkcs8',
+    der.buffer,
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+}
+
+/** Obtiene un access token de Google firmando un JWT (flujo de cuenta de servicio). */
+async function getGoogleAccessToken(
+  clientEmail: string,
+  privateKeyPem: string,
+  scope: string,
+): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const claim = b64url(
+    JSON.stringify({
+      iss: clientEmail,
+      scope,
+      aud: 'https://oauth2.googleapis.com/token',
+      exp: now + 3600,
+      iat: now,
+    }),
+  );
+  const unsigned = `${header}.${claim}`;
+  const key = await importPrivateKey(privateKeyPem);
+  const sig = await crypto.subtle.sign(
+    'RSASSA-PKCS1-v1_5',
+    key,
+    new TextEncoder().encode(unsigned),
+  );
+  const jwt = `${unsigned}.${b64urlBytes(new Uint8Array(sig))}`;
+
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion: jwt,
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok || !data.access_token) {
+    throw new Error(
+      `No se pudo autenticar con Google: ${data.error_description ?? data.error ?? res.status}`,
+    );
+  }
+  return data.access_token as string;
+}
+
+interface GaMetric { name: string }
+interface GaRow {
+  dimensionValues: { value: string }[];
+  metricValues: { value: string }[];
+}
+
+async function runReport(
+  token: string,
+  propertyId: string,
+  metrics: GaMetric[],
+  startDate: string,
+  endDate: string,
+  withDate: boolean,
+): Promise<GaRow[]> {
+  const res = await fetch(
+    `https://analyticsdata.googleapis.com/v1beta/properties/${propertyId}:runReport`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        dateRanges: [{ startDate, endDate }],
+        dimensions: withDate ? [{ name: 'date' }] : [],
+        metrics,
+        orderBys: withDate
+          ? [{ dimension: { dimensionName: 'date' } }]
+          : undefined,
+      }),
+    },
+  );
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data?.error?.message ?? `Error GA4 (${res.status})`);
+  }
+  return (data.rows ?? []) as GaRow[];
+}
+
+interface GaConfig {
+  propertyId: string;
+  serviceAccount: { client_email: string; private_key: string };
+}
+
+/**
+ * Resuelve la configuración de GA4 desde (1) variables de entorno o, si no,
+ * (2) la tabla panel.integration_config. Devuelve `null` si no hay config.
+ *
+ * @param service cliente service_role para leer la tabla (o null para omitir).
+ */
+async function resolveGaConfig(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  service: any | null,
+): Promise<GaConfig | null> {
+  // 1) Variables de entorno (secretos de Supabase).
+  const envProperty = Deno.env.get('GA_PROPERTY_ID');
+  const envSa = Deno.env.get('GA_SERVICE_ACCOUNT_JSON');
+  if (envProperty && envSa) {
+    return { propertyId: envProperty, serviceAccount: JSON.parse(envSa) };
+  }
+
+  // 2) Tabla de configuración (config guardada en la base de datos).
+  if (service) {
+    const { data } = await service
+      .schema('panel')
+      .from('integration_config')
+      .select('config')
+      .eq('channel', 'analytics')
+      .maybeSingle();
+    const cfg = data?.config;
+    if (cfg?.property_id && cfg?.service_account) {
+      const sa =
+        typeof cfg.service_account === 'string'
+          ? JSON.parse(cfg.service_account)
+          : cfg.service_account;
+      return { propertyId: String(cfg.property_id), serviceAccount: sa };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Lee GA4 y devuelve el estado del canal `analytics` normalizado.
+ * Devuelve `null` si no hay credenciales configuradas (→ usar demo).
+ */
+async function fetchAnalyticsChannel(
+  period: Period,
+  gaConfig: GaConfig | null,
+): Promise<unknown | null> {
+  if (!gaConfig) return null; // no configurado todavía
+
+  const sa = gaConfig.serviceAccount;
+  const propertyId = gaConfig.propertyId;
+  const token = await getGoogleAccessToken(
+    sa.client_email,
+    sa.private_key,
+    'https://www.googleapis.com/auth/analytics.readonly',
+  );
+
+  const days = period === '30d' ? 30 : 7;
+  const metrics: GaMetric[] = [
+    { name: 'sessions' },
+    { name: 'screenPageViews' },
+    { name: 'averageSessionDuration' },
+    { name: 'bounceRate' },
+  ];
+
+  // Periodo actual, con serie diaria.
+  const rows = await runReport(
+    token,
+    propertyId,
+    metrics,
+    `${days - 1}daysAgo`,
+    'today',
+    true,
+  );
+
+  let sessions = 0;
+  let pageViews = 0;
+  let durWeighted = 0;
+  let bounceWeighted = 0;
+  const labels: string[] = [];
+  const points: number[] = [];
+  for (const r of rows) {
+    const d = r.dimensionValues[0]?.value ?? '';
+    const s = Number(r.metricValues[0]?.value ?? 0);
+    const pv = Number(r.metricValues[1]?.value ?? 0);
+    const dur = Number(r.metricValues[2]?.value ?? 0);
+    const br = Number(r.metricValues[3]?.value ?? 0);
+    sessions += s;
+    pageViews += pv;
+    durWeighted += dur * s;
+    bounceWeighted += br * s;
+    if (d.length === 8) {
+      labels.push(`${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`);
+      points.push(s);
+    }
+  }
+  const avgDuration = sessions ? durWeighted / sessions : 0;
+  const bounceRate = sessions ? bounceWeighted / sessions : 0; // GA4: proporción 0–1
+
+  // Periodo anterior (solo sesiones) para calcular la variación.
+  let changePct: number | undefined;
+  try {
+    const prev = await runReport(
+      token,
+      propertyId,
+      [{ name: 'sessions' }],
+      `${days * 2 - 1}daysAgo`,
+      `${days}daysAgo`,
+      false,
+    );
+    const prevSessions = prev.reduce(
+      (acc, r) => acc + Number(r.metricValues[0]?.value ?? 0),
+      0,
+    );
+    if (prevSessions > 0) {
+      changePct = ((sessions - prevSessions) / prevSessions) * 100;
+    }
+  } catch {
+    /* la variación es opcional */
+  }
+
+  return {
+    channel: {
+      id: 'analytics',
+      status: 'connected',
+      lastSyncedAt: new Date().toISOString(),
+      data: {
+        primary: metric('Sesiones', compact(sessions), changePct),
+        secondary: [
+          metric('Páginas vistas', compact(pageViews)),
+          metric('Duración', duration(avgDuration)),
+          metric('Rebote', percent(bounceRate * 100)),
+        ],
+        series: { labels, points },
+      },
+    },
+    sessions,
+    changePct,
+  };
+}
+
+// ===========================================================================
+// Snapshot de demostración (resto de canales / fallback)
+// ===========================================================================
+
 function makeRng(seed: number) {
   let s = seed >>> 0;
   return () => ((s = (s * 1664525 + 1013904223) >>> 0), s / 0xffffffff);
@@ -78,16 +342,7 @@ function buildSeries(days: number, base: number, rng: () => number) {
   return { labels, points };
 }
 
-/**
- * Construye un snapshot normalizado.
- *
- * TODO(integración real): en lugar de calcular cifras de demostración, aquí se
- * leerían las conexiones OAuth de `panel.connections` y se llamaría a cada API
- * de canal (Instagram/Facebook via Meta Graph, GA4 Data API, AdSense Management
- * API), mapeando cada respuesta a esta misma forma. Amazon se toma de
- * `panel.amazon_imports` (carga manual). El resto de la función no cambia.
- */
-function buildSnapshot(period: Period): unknown {
+function buildSnapshot(period: Period): Record<string, unknown> {
   const rng = makeRng(Date.now());
   const days = period === '30d' ? 30 : 7;
   const scale = period === '30d' ? 4.1 : 1;
@@ -218,12 +473,50 @@ function buildSnapshot(period: Period): unknown {
   };
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function syncSnapshot(_service: any, _userId: string, period: Period) {
-  // TODO(integración real): leer panel.connections del usuario y llamar a las
-  // APIs de canal server-side. Por ahora se calcula un snapshot de demostración.
-  return buildSnapshot(period);
+/**
+ * Construye el snapshot combinando datos reales (los disponibles) con demo.
+ * Hoy: Google Analytics real si está configurado; el resto, demo.
+ * TODO(integración real): añadir Instagram/Facebook (Meta Graph) y AdSense.
+ */
+async function buildRealSnapshot(
+  period: Period,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  service: any | null,
+): Promise<Record<string, unknown>> {
+  const snapshot = buildSnapshot(period);
+
+  try {
+    const gaConfig = await resolveGaConfig(service);
+    const ga = await fetchAnalyticsChannel(period, gaConfig);
+    if (ga) {
+      const channels = snapshot.channels as Record<string, unknown>;
+      channels.analytics = (ga as { channel: unknown }).channel;
+      // La KPI "Visitas al sitio" pasa a reflejar las sesiones reales.
+      const kpis = snapshot.kpis as Record<string, unknown>;
+      const sessions = (ga as { sessions: number }).sessions;
+      const changePct = (ga as { changePct?: number }).changePct;
+      kpis.siteVisits = metric('Visitas al sitio', compact(sessions), changePct);
+    }
+  } catch (err) {
+    // Configurado pero falló: mostramos el canal en estado de error (sin tumbar
+    // el resto del panel), con el motivo para diagnóstico.
+    const channels = snapshot.channels as Record<string, unknown>;
+    channels.analytics = {
+      id: 'analytics',
+      status: 'error',
+      error:
+        err instanceof Error
+          ? `Google Analytics: ${err.message}`
+          : 'Error al leer Google Analytics.',
+    };
+  }
+
+  return snapshot;
 }
+
+// ===========================================================================
+// Handler
+// ===========================================================================
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
@@ -253,12 +546,13 @@ Deno.serve(async (req) => {
       userId = data.user?.id ?? null;
     }
 
-    // Modo demo (sin login todavía): calcula y devuelve sin persistir.
-    if (!userId) {
-      return json(buildSnapshot(period));
-    }
-
+    // Cliente service_role para leer config/caché (RLS lo permite solo a él).
     const service = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+
+    // Modo anónimo (sin login todavía): calcula y devuelve sin persistir.
+    if (!userId) {
+      return json(await buildRealSnapshot(period, service));
+    }
 
     // Caché fresca → servir.
     const { data: cached } = await service
@@ -269,17 +563,25 @@ Deno.serve(async (req) => {
       .eq('period', period)
       .maybeSingle();
 
-    if (cached && Date.now() - new Date(cached.fetched_at).getTime() < CACHE_TTL_MS) {
+    if (
+      cached &&
+      Date.now() - new Date(cached.fetched_at).getTime() < CACHE_TTL_MS
+    ) {
       return json(cached.data);
     }
 
     // Stale o inexistente → re-sincronizar y cachear.
-    const snapshot = await syncSnapshot(service, userId, period);
+    const snapshot = await buildRealSnapshot(period, service);
     await service
       .schema('panel')
       .from('snapshots')
       .upsert(
-        { user_id: userId, period, data: snapshot, fetched_at: new Date().toISOString() },
+        {
+          user_id: userId,
+          period,
+          data: snapshot,
+          fetched_at: new Date().toISOString(),
+        },
         { onConflict: 'user_id,period' },
       );
 
